@@ -60,8 +60,10 @@ test('T13163',      [extra_files(['Test13163.hs']),
 test('T15303',      [extra_files(['Test15303.hs']),
                      ignore_stderr], makefile_test, ['T15303'])
 test('T16212',      [extra_files(['Test16212.hs']),
-                     ignore_stderr], run_command, ['$MAKE -s --no-print-directory T16212'])
+                     ignore_stderr], makefile_test, ['T16212'])
 test('T16230',      [extra_files(['Test16230.hs']),
-                     ignore_stderr], run_command, ['$MAKE -s --no-print-directory T16230'])
+                     ignore_stderr], makefile_test, ['T16230'])
 test('T16236',      [extra_files(['Test16236.hs']),
-                     ignore_stderr], run_command, ['$MAKE -s --no-print-directory T16236'])
+                     ignore_stderr], makefile_test, ['T16236'])
+test('StarBinderAnns',      [extra_files(['StarBinderAnns.hs']),
+                     ignore_stderr], makefile_test, ['StarBinderAnns'])
