@@ -2936,6 +2936,7 @@ outOfLineCmmOp bid mop res args
 
               MO_PopCnt _  -> fsLit "popcnt"
               MO_BSwap _   -> fsLit "bswap"
+              MO_BRev _    -> unsupported
               MO_Clz w     -> fsLit $ clzLabel w
               MO_Ctz _     -> unsupported
 
