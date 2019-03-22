@@ -14,6 +14,10 @@
   reverses the order of its bits e.g. `0b110001` becomes `0b100011`.
   These primitives use optimized machine instructions when available.
 
+- Added to `GHC.Prim`:
+
+        closureSize# :: a -> Int#
+
 ## 0.6.0
 
 - Shipped with GHC 8.8.1

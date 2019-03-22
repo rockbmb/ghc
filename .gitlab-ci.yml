@@ -2,7 +2,7 @@ variables:
   GIT_SSL_NO_VERIFY: "1"
 
   # Commit of ghc/ci-images repository from which to pull Docker images
-  DOCKER_REV: 6d19c3adc1f5c28c82aed8c5b1ac40931ac60f3f
+  DOCKER_REV: 07bd4acf4f91b56e22389d7b7f6c13486a7b63de
 
 before_script:
   - python3 .gitlab/fix-submodules.py
@@ -12,10 +12,12 @@ before_script:
   - "git fetch https://gitlab.haskell.org/ghc/ghc-performance-notes.git refs/notes/perf:refs/notes/perf || true"
 
 stages:
-  - lint
-  - build
-  - full-build
-  - cleanup # See Note [Cleanup on Windows]
+  - lint       # Source linting
+  - build      # A quick smoke-test to weed out broken commits
+  - full-build # Build all the things
+  - cleanup    # See Note [Cleanup on Windows]
+  - packaging  # Source distribution, etc.
+  - hackage    # head.hackage testing
 
 ############################################################
 # Runner Tags
@@ -132,7 +134,6 @@ hadrian-ghc-in-ghci:
       make V=0 -j$THREADS WERROR=-Werror
     - |
       make binary-dist TAR_COMP_OPTS="-1"
-      mv ghc-*.tar.xz ghc.tar.xz
     - |
       # Prepare to push git notes.
       METRICS_FILE=$(mktemp)
@@ -150,7 +151,7 @@ hadrian-ghc-in-ghci:
       junit: junit.xml
     expire_in: 2 week
     paths:
-      - ghc.tar.xz
+      - ghc-*.tar.xz
       - junit.xml
 
 #################################
@@ -164,6 +165,7 @@ validate-x86_64-darwin:
     - x86_64-darwin
   variables:
     GHC_VERSION: 8.6.3
+    BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-x86_64-apple-darwin.tar.xz"
     MACOSX_DEPLOYMENT_TARGET: "10.7"
     # Only Sierra and onwards supports clock_gettime. See #12858
     ac_cv_func_clock_gettime: "no"
@@ -225,6 +227,7 @@ validate-x86_64-darwin:
   allow_failure: true
   variables:
     TEST_ENV: "aarch64-linux-deb9"
+    BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-aarch64-linux-deb9.tar.xz"
   cache:
     key: linux-aarch64-deb9
   tags:
@@ -256,6 +259,7 @@ nightly-aarch64-linux-deb9:
   image: "registry.gitlab.haskell.org/ghc/ci-images/i386-linux-deb9:$DOCKER_REV"
   variables:
     TEST_ENV: "i386-linux-deb9"
+    BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-i386-deb9-linux.tar.xz"
   cache:
     key: linux-i386-deb9
 
@@ -282,10 +286,11 @@ nightly-i386-linux-deb9:
 
 .build-x86_64-linux-deb9:
   extends: .validate-linux
-  stage: build
+  stage: full-build
   image: "registry.gitlab.haskell.org/ghc/ci-images/x86_64-linux-deb9:$DOCKER_REV"
   variables:
     TEST_ENV: "x86_64-linux-deb9"
+    BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-x86_64-deb9-linux.tar.xz"
   cache:
     key: linux-x86_64-deb9
 
@@ -308,6 +313,7 @@ nightly-x86_64-linux-deb9:
 # N.B. Has DEBUG assertions enabled in stage2
 validate-x86_64-linux-deb9-debug:
   extends: .build-x86_64-linux-deb9
+  stage: build
   variables:
     BUILD_FLAVOUR: validate
     TEST_ENV: "x86_64-linux-deb9-debug"
@@ -325,6 +331,7 @@ validate-x86_64-linux-deb9-integer-simple:
   variables:
     INTEGER_LIBRARY: integer-simple
     TEST_ENV: "x86_64-linux-deb9-integer-simple"
+    BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-x86_64-deb9-linux-integer-simple.tar.xz"
 
 nightly-x86_64-linux-deb9-integer-simple:
   extends: .build-x86_64-linux-deb9
@@ -357,6 +364,7 @@ release-x86_64-linux-deb8:
   image: "registry.gitlab.haskell.org/ghc/ci-images/x86_64-linux-deb8:$DOCKER_REV"
   variables:
     TEST_ENV: "x86_64-linux-deb8"
+    BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-x86_64-deb8-linux.tar.xz"
   only:
     - tags
   cache:
@@ -370,14 +378,13 @@ release-x86_64-linux-deb8:
 # x86_64-linux-fedora27
 #################################
 
-release-x86_64-linux-fedora27:
+validate-x86_64-linux-fedora27:
   extends: .validate-linux
   stage: full-build
   image: "registry.gitlab.haskell.org/ghc/ci-images/x86_64-linux-fedora27:$DOCKER_REV"
   variables:
     TEST_ENV: "x86_64-linux-fedora27"
-  only:
-    - tags
+    BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-x86_64-fedora27-linux.tar.xz"
   cache:
     key: linux-x86_64-fedora27
   artifacts:
@@ -388,7 +395,7 @@ release-x86_64-linux-fedora27:
 # Validation via Pipelines (Windows)
 ############################################################
 
-.validate-windows:
+.build-windows:
   before_script:
     - git clean -xdf
     - git submodule foreach git clean -xdf
@@ -414,29 +421,26 @@ release-x86_64-linux-fedora27:
   dependencies: []
   variables:
     FORCE_SYMLINKS: 1
+    LANG: "en_US.UTF-8"
   cache:
     paths:
       - cabal-cache
       - ghc-8.6.2
       - ghc-tarballs
 
-validate-x86_64-windows-hadrian:
-  extends: .validate-windows
+.build-windows-hadrian:
+  extends: .build-windows
   stage: full-build
   variables:
     GHC_VERSION: "8.6.2"
-    LANG: "en_US.UTF-8"
   script:
     - |
-      set MSYSTEM=MINGW64
       python boot
       bash -c './configure --enable-tarballs-autodownload GHC=`pwd`/toolchain/bin/ghc HAPPY=`pwd`/toolchain/bin/happy ALEX=`pwd`/toolchain/bin/alex'
     - bash -c "PATH=`pwd`/toolchain/bin:$PATH hadrian/build.cabal.sh -j`mk/detect-cpu-count.sh` --flavour=Quick --docs=no-sphinx binary-dist"
     - mv _build/bindist/ghc*.tar.xz ghc.tar.xz
     # FIXME: Testsuite disabled due to #16156.
     # - bash -c 'make V=0 test THREADS=`mk/detect-cpu-count.sh` JUNIT_FILE=../../junit.xml'
-  cache:
-    key: x86_64-windows
   tags:
     - x86_64-windows
   artifacts:
@@ -444,36 +448,75 @@ validate-x86_64-windows-hadrian:
     paths:
       - ghc.tar.xz
 
-validate-x86_64-windows:
-  extends: .validate-windows
+validate-x86_64-windows-hadrian:
+  extends: .build-windows-hadrian
+  variables:
+    MSYSTEM: MINGW64
+  cache:
+    key: x86_64-windows-hadrian
+
+nightly-i386-windows-hadrian:
+  extends: .build-windows-hadrian
+  variables:
+    MSYSTEM: MINGW32
+  only:
+    variables:
+      - $NIGHTLY
+  cache:
+    key: i386-windows-hadrian
+
+.build-windows-make:
+  extends: .build-windows
   stage: full-build
   # due to #16084
   allow_failure: true
   variables:
     GHC_VERSION: "8.6.2"
-    LANG: "en_US.UTF-8"
+    BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-x86_64-mingw32.tar.xz"
   script:
     - |
-      set MSYSTEM=MINGW64
       python boot
       bash -c './configure --enable-tarballs-autodownload GHC=`pwd`/toolchain/bin/ghc HAPPY=`pwd`/toolchain/bin/happy ALEX=`pwd`/toolchain/bin/alex'
     - bash -c "echo include mk/flavours/quick.mk > mk/build.mk"
     - bash -c "PATH=`pwd`/toolchain/bin:$PATH make -j`mk/detect-cpu-count.sh`"
-    - |
-      bash -c "make binary-dist TAR_COMP_OPTS=-1"
-      mv ghc-*.tar.xz ghc.tar.xz
+    - bash -c "PATH=`pwd`/toolchain/bin:$PATH make binary-dist TAR_COMP_OPTS=-1"
     - bash -c 'make V=0 test THREADS=`mk/detect-cpu-count.sh` JUNIT_FILE=../../junit.xml'
-  cache:
-    key: x86_64-windows
   tags:
     - x86_64-windows
   artifacts:
     when: always
+    expire_in: 2 week
     reports:
       junit: junit.xml
     paths:
-      - ghc.tar.xz
+      - ghc-*.tar.xz
       - junit.xml
+
+validate-x86_64-windows:
+  extends: .build-windows-make
+  variables:
+    MSYSTEM: MINGW64
+  cache:
+    key: x86_64-windows
+
+release-i386-windows:
+  extends: .build-windows-make
+  only:
+    - tags
+  variables:
+    MSYSTEM: MINGW32
+  cache:
+    key: i386-windows
+
+nightly-i386-windows:
+  extends: .build-windows-make
+  only:
+    variables:
+      - $NIGHTLY
+  variables:
+    MSYSTEM: MINGW32
+  cache:
+    key: i386-windows
 
 ############################################################
 # Cleanup
@@ -530,3 +573,84 @@ cleanup-darwin:
     - rm -Rf $BUILD_DIR/*
     - exit 0
 
+############################################################
+# Packaging
+############################################################
+
+doc-tarball:
+  stage: packaging
+  tags:
+    - x86_64-linux
+  image: ghcci/x86_64-linux-deb9:0.2
+  dependencies:
+    - validate-x86_64-linux-deb9
+    - validate-x86_64-windows
+  artifacts:
+    paths:
+      - haddock.html.tar.xz
+      - libraries.html.tar.xz
+      - users_guide.html.tar.xz
+      - index.html
+      - "*.pdf"
+  script:
+    - rm -Rf docs
+    - distrib/mkDocs/mkDocs ghc-x86_64-deb9-linux.tar.xz ghc-x86_64-mingw32.tar.xz
+    - ls -lh
+    - mv docs/*.tar.xz .
+
+source-tarball:
+  stage: packaging
+  tags:
+    - x86_64-linux
+  image: ghcci/x86_64-linux-deb9:0.2
+  only:
+    - tags
+  artifacts:
+    paths:
+      - ghc-*.tar.xz
+      - version
+  script:
+    - mk/get-win32-tarballs.sh download all
+    - ./boot
+    - ./configure
+    - make sdist
+    - mv sdistprep/*.xz  .
+    - make show VALUE=version > version
+
+
+############################################################
+# Testing via head.hackage
+############################################################
+
+# Triggering jobs in the ghc/head.hackage project requires that we have a job
+# token for that repository. Furthermore the head.hackage CI job must have
+# access to an unprivileged access token with the ability to query the ghc/ghc
+# project such that it can find the job ID of the fedora27 job for the current
+# pipeline.
+
+.hackage:
+  stage: hackage
+  image: ghcci/x86_64-linux-deb9:0.2
+  tags:
+    - x86_64-linux
+  dependencies: []
+  variables:
+    HEAD_HACKAGE_PROJECT_ID: "78"
+  script:
+    - bash .gitlab/start-head.hackage.sh
+
+hackage:
+  extends: .hackage
+  when: manual
+
+hackage-label:
+  extends: .hackage
+  only:
+    variables:
+      - $CI_MERGE_REQUEST_LABELS =~ /.*user-facing.*/
+
+nightly-hackage:
+  extends: .hackage
+  only:
+    variables:
+      - $NIGHTLY
