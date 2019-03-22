@@ -10,10 +10,18 @@ See [this excellent](https://stackoverflow.com/questions/746171/most-efficient-a
 Stack Overflow answer about bit order reversal for (much) more detail.
 (Link valid as of March 2019.)
 
-To summarize, the lookup table is faster, but much more memory-heavy e.g.
-doing it for 64-bit words can take 64KB if only 16-bits are reversed at a time.
-Working directly with bits is slower, but uses much less memory as bit-wise
-operators aren't space-onerous.
+To summarize,
+
+    * the lookup table is faster, but much more memory-heavy e.g.
+      doing it for 64-bit words can take 64KB if only 16-bits are reversed at
+      a time.
+    * working directly with bits is slower (roughly on the same order of
+      magnitude as the previous alternative), but uses much less memory as
+      bit-wise operators aren't space-onerous.
+
+The code below uses the latter option. If in the future the performance of this
+primop must be improved, the information provided in this comment should be
+useful in making the decision of which changes to make.
 
 For more information on how the below bit-twiddling functions came to be, see
 [this](http://graphics.stanford.edu/~seander/bithacks.html#ReverseParallel)
