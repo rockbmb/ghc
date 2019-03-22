@@ -1,7 +1,8 @@
 import Data.Bits        (FiniteBits (..), unsafeShiftL, unsafeShiftR, (.&.),
                          (.|.))
 import Data.Char        (intToDigit)
-import Data.Word        (bitReverse8, bitReverse16, bitReverse32, bitReverse64)
+import Data.Word        (Word8, Word16, Word32, Word64, bitReverse8,
+                         bitReverse16, bitReverse32, bitReverse64)
 import Numeric          (showIntAtBase)
 
 -- | Given a word, check:
