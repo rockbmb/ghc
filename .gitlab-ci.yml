@@ -2,7 +2,7 @@ variables:
   GIT_SSL_NO_VERIFY: "1"
 
   # Commit of ghc/ci-images repository from which to pull Docker images
-  DOCKER_REV: 07bd4acf4f91b56e22389d7b7f6c13486a7b63de
+  DOCKER_REV: cefaee3c742af193e0f7783f87edb0d35374515c
 
 before_script:
   - python3 .gitlab/fix-submodules.py
@@ -18,6 +18,14 @@ stages:
   - cleanup    # See Note [Cleanup on Windows]
   - packaging  # Source distribution, etc.
   - hackage    # head.hackage testing
+  - deploy     # push documentation
+
+.only-default: &only-default
+  only:
+    - master
+    - /ghc-[0-9]+\.[0-9]+/
+    - merge_requests
+    - tags
 
 ############################################################
 # Runner Tags
@@ -36,27 +44,57 @@ stages:
 ############################################################
 
 ghc-linters:
+  allow_failure: true
   stage: lint
   image: "registry.gitlab.haskell.org/ghc/ci-images/linters:$DOCKER_REV"
   script:
-    - |
-      if [ -n "$CI_MERGE_REQUEST_ID" ]; then
-        base="$(git merge-base $CI_MERGE_REQUEST_BRANCH_NAME HEAD)"
-        validate-commit-msg .git $(git rev-list $base..$CI_COMMIT_SHA)
-        submodchecker .git $(git rev-list $base..$CI_COMMIT_SHA)
-        validate-whitespace .git $(git rev-list $base..$CI_COMMIT_SHA)
-        .gitlab/linters/check-makefiles.py $base $CI_COMMIT_SHA
-        .gitlab/linters/check-cpp.py $base $CI_COMMIT_SHA
-      fi
+    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+    - base="$(git merge-base FETCH_HEAD $CI_COMMIT_SHA)"
+    - "echo Merge base $base"
+    #    - validate-commit-msg .git $(git rev-list $base..$CI_COMMIT_SHA)
+    - validate-whitespace .git $(git rev-list $base..$CI_COMMIT_SHA)
+    - .gitlab/linters/check-makefiles.py $base $CI_COMMIT_SHA
+    - .gitlab/linters/check-cpp.py $base $CI_COMMIT_SHA
   dependencies: []
   tags:
     - lint
+  only:
+    refs:
+      - merge_requests
+
+# We allow the submodule checker to fail when run on merge requests (to
+# accomodate, e.g., haddock changes not yet upstream) but not on `master` or
+# Marge jobs.
+.lint-submods:
+  stage: lint
+  image: "registry.gitlab.haskell.org/ghc/ci-images/linters:$DOCKER_REV"
+  script:
+    - submodchecker .git $(git rev-list $base..$CI_COMMIT_SHA)
+  dependencies: []
+  tags:
+    - lint
+
+lint-submods:
+  extends: .lint-submods
+  only:
+    refs:
+      - master
+      - /ghc-[0-9]+\.[0-9]+/
+      - wip/marge_bot_batch_merge_job
+
+lint-submods-mr:
+  extends: .lint-submods
+  allow_failure: true
+  only:
+    refs:
+      - merge_requests
 
 ############################################################
 # Validation via Pipelines (hadrian)
 ############################################################
 
 .validate-hadrian:
+  <<: *only-default
   allow_failure: true
   script:
     - cabal update
@@ -92,6 +130,7 @@ validate-x86_64-linux-deb8-hadrian:
     - x86_64-linux
 
 hadrian-ghc-in-ghci:
+  <<: *only-default
   stage: build
   image: ghcci/x86_64-linux-deb8:0.1
   before_script:
@@ -122,6 +161,7 @@ hadrian-ghc-in-ghci:
 ############################################################
 
 .validate:
+  <<: *only-default
   variables:
     TEST_TYPE: test
   before_script:
@@ -396,6 +436,7 @@ validate-x86_64-linux-fedora27:
 ############################################################
 
 .build-windows:
+  <<: *only-default
   before_script:
     - git clean -xdf
     - git submodule foreach git clean -xdf
@@ -471,13 +512,14 @@ nightly-i386-windows-hadrian:
   # due to #16084
   allow_failure: true
   variables:
+    BUILD_FLAVOUR: "quick"
     GHC_VERSION: "8.6.2"
     BIN_DIST_PREP_TAR_COMP: "bindistprep/ghc-x86_64-mingw32.tar.xz"
   script:
     - |
       python boot
-      bash -c './configure --enable-tarballs-autodownload GHC=`pwd`/toolchain/bin/ghc HAPPY=`pwd`/toolchain/bin/happy ALEX=`pwd`/toolchain/bin/alex'
-    - bash -c "echo include mk/flavours/quick.mk > mk/build.mk"
+      bash -c './configure --enable-tarballs-autodownload GHC=`pwd`/toolchain/bin/ghc HAPPY=`pwd`/toolchain/bin/happy ALEX=`pwd`/toolchain/bin/alex $CONFIGURE_ARGS'
+    - bash -c "echo include mk/flavours/${BUILD_FLAVOUR}.mk > mk/build.mk"
     - bash -c "PATH=`pwd`/toolchain/bin:$PATH make -j`mk/detect-cpu-count.sh`"
     - bash -c "PATH=`pwd`/toolchain/bin:$PATH make binary-dist TAR_COMP_OPTS=-1"
     - bash -c 'make V=0 test THREADS=`mk/detect-cpu-count.sh` JUNIT_FILE=../../junit.xml'
@@ -496,8 +538,19 @@ validate-x86_64-windows:
   extends: .build-windows-make
   variables:
     MSYSTEM: MINGW64
+    CONFIGURE_ARGS: "--target=x86_64-unknown-mingw32"
   cache:
     key: x86_64-windows
+
+# Normal Windows validate builds are profiled; that won't do for releases.
+release-x86_64-windows:
+  extends: validate-x86_64-windows
+  variables:
+    MSYSTEM: MINGW64
+    BUILD_FLAVOUR: "perf"
+    CONFIGURE_ARGS: "--target=x86_64-unknown-mingw32"
+  only:
+    - tags
 
 release-i386-windows:
   extends: .build-windows-make
@@ -505,6 +558,8 @@ release-i386-windows:
     - tags
   variables:
     MSYSTEM: MINGW32
+    BUILD_FLAVOUR: "perf"
+    CONFIGURE_ARGS: "--target=i386-unknown-mingw32"
   cache:
     key: i386-windows
 
@@ -515,6 +570,7 @@ nightly-i386-windows:
       - $NIGHTLY
   variables:
     MSYSTEM: MINGW32
+    CONFIGURE_ARGS: "--target=i386-unknown-mingw32"
   cache:
     key: i386-windows
 
@@ -535,6 +591,7 @@ nightly-i386-windows:
 
 # See Note [Cleanup after shell executor]
 cleanup-windows:
+  <<: *only-default
   stage: cleanup
   tags:
     - x86_64-windows
@@ -557,6 +614,7 @@ cleanup-windows:
 
 # See Note [Cleanup after shell executor]
 cleanup-darwin:
+  <<: *only-default
   stage: cleanup
   tags:
     - x86_64-darwin
@@ -578,7 +636,9 @@ cleanup-darwin:
 ############################################################
 
 doc-tarball:
+  <<: *only-default
   stage: packaging
+  allow_failure: true
   tags:
     - x86_64-linux
   image: ghcci/x86_64-linux-deb9:0.2
@@ -629,6 +689,7 @@ source-tarball:
 # pipeline.
 
 .hackage:
+  <<: *only-default
   stage: hackage
   image: ghcci/x86_64-linux-deb9:0.2
   tags:
@@ -654,3 +715,23 @@ nightly-hackage:
   only:
     variables:
       - $NIGHTLY
+
+pages:
+  stage: deploy
+  dependencies:
+    - doc-tarball
+  image: ghcci/x86_64-linux-deb9:0.2
+  tags:
+    - x86_64-linux
+  script:
+    - mkdir -p public/doc
+    - tar -xf haddock.html.tar.xz -C public/doc
+    - tar -xf libraries.html.tar.xz -C public/doc
+    - tar -xf users_guide.html.tar.xz -C public/doc
+    - cp -f index.html public/doc
+  only:
+    - master
+  artifacts:
+    paths:
+      - public
+
